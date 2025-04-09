@@ -75,7 +75,11 @@ func NewClient(ctx context.Context, adminEmail string, customerId string, servic
 		if err != nil {
 			return nil, fmt.Errorf("admin service: %w", err)
 		}
-		return &client{ctx: ctx, service: srv}, nil
+		return &client{
+			ctx:     ctx,
+			service: srv,
+			customerId: customerId,
+		}, nil
 	}
 
 	config, err := google.JWTConfigFromJSON(serviceAccountKey, admin.AdminDirectoryGroupReadonlyScope,
