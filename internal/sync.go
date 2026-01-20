@@ -115,6 +115,13 @@ func (s *syncGSuite) SyncUsers(query string) error {
 	}
 
 	for _, u := range googleUsers {
+		if u.PrimaryEmail == "" {
+			log.WithFields(log.Fields{
+				"name": u.Name.FullName,
+			}).Warn("skipping user without email")
+			continue
+		}
+
 		if s.ignoreUser(u.PrimaryEmail) {
 			continue
 		}
@@ -557,6 +564,13 @@ func (s *syncGSuite) getGoogleGroupsAndUsers(queryGroups string, queryUsers stri
 	for _, u := range googleUsers {
 		log.WithField("email", u).Debug("processing userMatch")
 
+		if u.PrimaryEmail == "" {
+			log.WithFields(log.Fields{
+				"name": u.Name.FullName,
+			}).Warn("skipping user without email")
+			continue
+		}
+
                 // Remove any users that should be ignored
 		if s.ignoreUser(u.PrimaryEmail) {
                 	log.WithField("id", u.PrimaryEmail).Debug("ignoring user")
@@ -601,7 +615,12 @@ func (s *syncGSuite) getGoogleGroupsAndUsers(queryGroups string, queryUsers stri
 		// If we've not seen the user email address before add it to the list of unique users
 		// also, we need to deduplicate the list of members.
 		gUniqMembers := make(map[string]*admin.User)
-                for _, m := range membersUsers {
+		for _, m := range membersUsers {
+			if m.PrimaryEmail == "" {
+				log.WithField("name", m.Name.FullName).Warn("skipping group member without email")
+				continue
+			}
+
 			_, ok := gUniqUsers[m.PrimaryEmail]
 			if !ok {
 				gUniqUsers[m.PrimaryEmail] = gUserDetailCache[m.PrimaryEmail]
