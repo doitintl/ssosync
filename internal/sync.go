@@ -52,10 +52,10 @@ type syncGSuite struct {
 	cfg           *config.Config
 	identityStore interfaces.IdentityStoreAPI
 
-	users            map[string]*interfaces.User
-	ignoreUsersSet   map[string]struct{}
-	ignoreGroupsSet  map[string]struct{}
-	includeGroupsSet map[string]struct{}
+	users               map[string]*interfaces.User
+	ignoreUserPatterns  []string
+	ignoreGroupPatterns []string
+	includeGroupsSet    map[string]struct{}
 }
 
 // New will create a new SyncGSuite object
@@ -386,8 +386,8 @@ func (s *syncGSuite) SyncGroupsUsers(queryGroups string, queryUsers string) erro
 	}
 
 	// create list of changes by operations
-	addAWSUsers, delAWSUsers, updateAWSUsers, _ := getUserOperations(awsUsers, googleUsers)
-	addAWSGroups, delAWSGroups, equalAWSGroups := getGroupOperations(awsGroups, googleGroups)
+	addAWSUsers, delAWSUsers, updateAWSUsers, _ := getUserOperations(awsUsers, googleUsers, s.ignoreUser)
+	addAWSGroups, delAWSGroups, equalAWSGroups := getGroupOperations(awsGroups, googleGroups, s.ignoreGroup)
 
 	log.Info("syncing changes")
 
@@ -915,8 +915,11 @@ func (s *syncGSuite) getGoogleGroupsAndUsers(queryGroups string, queryUsers stri
 	return gGroups, gUsers, gGroupsUsers, nil
 }
 
-// getGroupOperations returns the groups of AWS that must be added, deleted and are equals
-func getGroupOperations(awsGroups []*interfaces.Group, googleGroups []*admin.Group) (add []*interfaces.Group, delete []*interfaces.Group, equals []*interfaces.Group) {
+// getGroupOperations returns the groups of AWS that must be added, deleted and are equals.
+// ignoreGroup, if non-nil, is consulted before queueing an AWS-only group for deletion;
+// matching groups are skipped so wildcard ignore patterns protect AWS groups that have
+// no counterpart in Google.
+func getGroupOperations(awsGroups []*interfaces.Group, googleGroups []*admin.Group, ignoreGroup func(string) bool) (add []*interfaces.Group, delete []*interfaces.Group, equals []*interfaces.Group) {
 
 	log.Debug("getGroupOperations()")
 	awsMap := make(map[string]*interfaces.Group)
@@ -944,6 +947,10 @@ func getGroupOperations(awsGroups []*interfaces.Group, googleGroups []*admin.Gro
 	// AWS Groups not found in Google
 	for _, awsGroup := range awsGroups {
 		if _, found := googleMap[awsGroup.DisplayName]; !found {
+			if ignoreGroup != nil && ignoreGroup(awsGroup.DisplayName) {
+				log.WithField("group", awsGroup.DisplayName).Info("skip delete: ignore list")
+				continue
+			}
 			log.WithField("awsGroup", awsGroup).Debug("delete")
 			delete = append(delete, aws.NewGroup(awsGroup.DisplayName))
 		}
@@ -952,8 +959,11 @@ func getGroupOperations(awsGroups []*interfaces.Group, googleGroups []*admin.Gro
 	return add, delete, equals
 }
 
-// getUserOperations returns the users of AWS that must be added, deleted, updated and are equals
-func getUserOperations(awsUsers []*interfaces.User, googleUsers []*admin.User) (add []*interfaces.User, delete []*interfaces.User, update []*interfaces.User, equals []*interfaces.User) {
+// getUserOperations returns the users of AWS that must be added, deleted, updated and are equals.
+// ignoreUser, if non-nil, is consulted before queueing an AWS-only user for deletion;
+// matching users are skipped so wildcard ignore patterns protect AWS users that have no
+// counterpart in Google.
+func getUserOperations(awsUsers []*interfaces.User, googleUsers []*admin.User, ignoreUser func(string) bool) (add []*interfaces.User, delete []*interfaces.User, update []*interfaces.User, equals []*interfaces.User) {
 
 	log.Debug("getUserOperations()")
 	awsMap := make(map[string]*interfaces.User)
@@ -997,6 +1007,10 @@ func getUserOperations(awsUsers []*interfaces.User, googleUsers []*admin.User) (
 	// Google Users founds and not in aws
 	for _, awsUser := range awsUsers {
 		if _, found := googleMap[awsUser.Username]; !found {
+			if ignoreUser != nil && ignoreUser(awsUser.Username) {
+				log.WithField("user", awsUser.Username).Info("skip delete: ignore list")
+				continue
+			}
 			log.WithFields(log.Fields{
 				"awsUser": awsUser,
 			}).Debug("delete")
@@ -1159,33 +1173,64 @@ func DoSync(ctx context.Context, cfg *config.Config) error {
 }
 
 func (s *syncGSuite) ignoreUser(name string) bool {
-	if s.cfg.IgnoreUsers == nil {
-		return false
+	if s.ignoreUserPatterns == nil {
+		s.ignoreUserPatterns = trimPatterns(s.cfg.IgnoreUsers)
 	}
-
-	if s.ignoreUsersSet == nil {
-		s.ignoreUsersSet = make(map[string]struct{}, len(s.cfg.IgnoreUsers))
-		for _, u := range s.cfg.IgnoreUsers {
-			s.ignoreUsersSet[u] = struct{}{}
-		}
-	}
-	_, exists := s.ignoreUsersSet[name]
-	return exists
+	return matchesAny(s.ignoreUserPatterns, strings.TrimSpace(name))
 }
 
 func (s *syncGSuite) ignoreGroup(name string) bool {
-	if s.cfg.IgnoreGroups == nil {
-		return false
+	if s.ignoreGroupPatterns == nil {
+		s.ignoreGroupPatterns = trimPatterns(s.cfg.IgnoreGroups)
 	}
+	return matchesAny(s.ignoreGroupPatterns, strings.TrimSpace(name))
+}
 
-	if s.ignoreGroupsSet == nil {
-		s.ignoreGroupsSet = make(map[string]struct{}, len(s.cfg.IgnoreGroups))
-		for _, g := range s.cfg.IgnoreGroups {
-			s.ignoreGroupsSet[g] = struct{}{}
+// trimPatterns returns a copy of patterns with surrounding whitespace removed
+// and empty entries dropped. It returns a non-nil (possibly empty) slice so the
+// lazy-init check (`== nil`) doesn't retry on every call when the config has
+// no patterns.
+func trimPatterns(patterns []string) []string {
+	out := make([]string, 0, len(patterns))
+	for _, p := range patterns {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
 		}
 	}
-	_, exists := s.ignoreGroupsSet[name]
-	return exists
+	return out
+}
+
+func matchesAny(patterns []string, name string) bool {
+	for _, p := range patterns {
+		if matchIgnorePattern(p, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchIgnorePattern reports whether name matches pattern. The only special
+// character is '*', which matches any (possibly empty) substring. Every other
+// character — including '?', '[', ']', and '\' — is matched literally. The
+// matcher is deliberately narrower than path.Match / filepath.Match so that
+// patterns cannot accidentally pick up extra metacharacter semantics.
+func matchIgnorePattern(pattern, name string) bool {
+	if !strings.Contains(pattern, "*") {
+		return pattern == name
+	}
+	parts := strings.Split(pattern, "*")
+	if !strings.HasPrefix(name, parts[0]) {
+		return false
+	}
+	name = name[len(parts[0]):]
+	for _, p := range parts[1 : len(parts)-1] {
+		i := strings.Index(name, p)
+		if i < 0 {
+			return false
+		}
+		name = name[i+len(p):]
+	}
+	return strings.HasSuffix(name, parts[len(parts)-1])
 }
 
 func (s *syncGSuite) includeGroup(name string) bool {

@@ -187,12 +187,20 @@ SSO Sync requires configuration from both Google Workspace and AWS sides.
   --group-match "*" \
   --sync-method users_groups
 
-# Ignore specific users/groups
+# Ignore specific users/groups (entries may use '*' as a wildcard)
 ./ssosync \
   --group-match "*" \
-  --ignore-users "service@company.com,bot@company.com" \
-  --ignore-groups "temp-group@company.com"
+  --ignore-users "service@company.com,bot@company.com,*@contractors.example.com" \
+  --ignore-groups "temp-group@company.com,AWS*"
 ```
+
+Ignored users and groups are protected in both directions: they are skipped
+when Google is enumerated, and they are also skipped when picking AWS
+entries to delete. This means a pattern like `*@contractors.example.com`
+acts as a deletion guard for accounts that exist only in AWS.
+
+Only `*` is special — it matches any (possibly empty) substring. Every
+other character, including `?`, `[`, `]`, and `\`, is matched literally.
 
 ### Environment Variables
 
@@ -222,8 +230,8 @@ export SSOSYNC_DRY_RUN="true"
 | `--sync-method` | `SSOSYNC_SYNC_METHOD` | Sync method (`groups` or `users_groups`) | `groups` |
 | `--group-match` | `SSOSYNC_GROUP_MATCH` | Google Groups filter query | `*` |
 | `--user-match` | `SSOSYNC_USER_MATCH` | Google Users filter query | `""` |
-| `--ignore-users` | `SSOSYNC_IGNORE_USERS` | Comma-separated list of users to ignore | `[]` |
-| `--ignore-groups` | `SSOSYNC_IGNORE_GROUPS` | Comma-separated list of groups to ignore | `[]` |
+| `--ignore-users` | `SSOSYNC_IGNORE_USERS` | Comma-separated list of users to ignore (supports `*` wildcard) | `[]` |
+| `--ignore-groups` | `SSOSYNC_IGNORE_GROUPS` | Comma-separated list of groups to ignore (supports `*` wildcard) | `[]` |
 | `--include-groups` | `SSOSYNC_INCLUDE_GROUPS` | Include only these groups (users_groups method only) | `[]` |
 | `--dry-run` | `SSOSYNC_DRY_RUN` | Enable dry-run mode | `false` |
 | `--log-level` | `SSOSYNC_LOG_LEVEL` | Log level (debug, info, warn, error) | `info` |
