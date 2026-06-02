@@ -157,6 +157,11 @@ func (s *syncGSuite) SyncUsers(query string) error {
 	}
 
 	for _, u := range googleUsers {
+		if u.PrimaryEmail == "" {
+			log.WithField("name", u.Name.FullName).Warn("skipping user without email")
+			continue
+		}
+
 		if s.ignoreUser(u.PrimaryEmail) {
 			continue
 		}
@@ -652,6 +657,14 @@ func (s *syncGSuite) getGoogleGroupsAndUsers(queryGroups string, queryUsers stri
 				"user": u,
 			}).Debug("process user")
 
+			if u.PrimaryEmail == "" {
+				log.WithFields(log.Fields{
+					"func": funcName,
+					"name": u.Name.FullName,
+				}).Warn("skipping user without email")
+				continue
+			}
+
 			// Remove any users that should be ignored
 			if s.ignoreUser(u.PrimaryEmail) {
 				log.WithFields(log.Fields{
@@ -734,6 +747,14 @@ func (s *syncGSuite) getGoogleGroupsAndUsers(queryGroups string, queryUsers stri
 					"func": funcName,
 					"user": u,
 				}).Debug("process user")
+
+				if u.PrimaryEmail == "" {
+					log.WithFields(log.Fields{
+						"func": funcName,
+						"name": u.Name.FullName,
+					}).Warn("skipping user without email")
+					continue
+				}
 
 				if _, found := gUniqUsers[u.PrimaryEmail]; !found {
 					log.WithFields(log.Fields{
@@ -839,6 +860,14 @@ func (s *syncGSuite) getGoogleGroupsAndUsers(queryGroups string, queryUsers stri
 						"group.Id":  g.Id,
 						"member.Id": m.Id,
 					}).Error("nil user")
+					continue
+				}
+				if m.PrimaryEmail == "" {
+					log.WithFields(log.Fields{
+						"func":     funcName,
+						"group.Id": g.Id,
+						"name":     m.Name.FullName,
+					}).Warn("skipping group member without email")
 					continue
 				}
 				if _, found := gUniqUsers[m.PrimaryEmail]; !found {
