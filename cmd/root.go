@@ -259,8 +259,8 @@ func configLambda() {
 	// Handle environment variables for other settings
 	cfg.LogLevel = getEnvStr("LOG_LEVEL", config.DefaultLogLevel)
 	cfg.LogFormat = getEnvStr("LOG_FORMAT", config.DefaultLogFormat)
-	cfg.SyncMethod = getEnvStr("SYNC_METHOD", config.DefaultLogFormat)
-	cfg.UserMatch = getEnvStr("USER_MATCH", "")
+	cfg.SyncMethod = getEnvStr("SYNC_METHOD", config.DefaultSyncMethod)
+	cfg.UserMatch = getEnvStr("USER_MATCH", "*")
 	cfg.GroupMatch = getEnvStr("GROUP_MATCH", "*")
 	cfg.IgnoreGroups = getEnvStrs("IGNORE_GROUPS", []string{})
 	cfg.IgnoreUsers = getEnvStrs("IGNORE_USERS", []string{})

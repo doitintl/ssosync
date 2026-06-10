@@ -194,7 +194,11 @@ func (s *syncGSuite) SyncGroups(query string) error {
 		return err
 	}
 
-	correlatedGroups := make(map[string]*interfaces.Group)
+	// Build user ID -> user map once for membership lookups
+	awsUsersByID := make(map[string]*interfaces.User, len(s.users))
+	for _, u := range s.users {
+		awsUsersByID[u.ID] = u
+	}
 
 	for _, g := range googleGroups {
 		if s.ignoreGroup(g.Email) || !s.includeGroup(g.Email) {
@@ -215,7 +219,6 @@ func (s *syncGSuite) SyncGroups(query string) error {
 
 		if gg != nil {
 			log.Debug("Found group")
-			correlatedGroups[gg.DisplayName] = gg
 			group = gg
 		} else {
 			log.Info("Creating group in AWS")
@@ -229,53 +232,61 @@ func (s *syncGSuite) SyncGroups(query string) error {
 				return err
 			}
 			newGroup.ID = *createGroupOutput.GroupId
-			correlatedGroups[newGroup.DisplayName] = newGroup
 			group = newGroup
 		}
 
+		// Fetch current AWS members with one paginated ListGroupMemberships call
+		currentMembersMap, err := s.GetGroupMembershipsLists([]*interfaces.Group{group}, awsUsersByID)
+		if err != nil {
+			return err
+		}
+		currentMemberEmails := make(map[string]struct{})
+		for _, u := range currentMembersMap[group.DisplayName] {
+			currentMemberEmails[u.Username] = struct{}{}
+		}
+
+		// Build desired member set from Google (only users already synced to AWS)
 		groupMembers, err := s.google.GetGroupMembers(g)
 		if err != nil {
 			return err
 		}
-
-		memberList := make(map[string]*admin.Member)
-
-		log.Info("Start group user sync")
-
+		desiredMemberEmails := make(map[string]struct{})
 		for _, m := range groupMembers {
 			if _, ok := s.users[m.Email]; ok {
-				memberList[m.Email] = m
+				desiredMemberEmails[m.Email] = struct{}{}
 			}
 		}
 
-		for _, u := range s.users {
-			log.WithField("user", u.Username).Debug("Checking user is in group already")
-			b, err := identitystore.IsMemberInGroups(context.Background(), s.identityStore, &s.cfg.IdentityStoreID, []string{group.ID}, &u.ID)
+		log.Info("Start group user sync")
+
+		for email := range desiredMemberEmails {
+			if _, alreadyMember := currentMemberEmails[email]; alreadyMember {
+				continue
+			}
+			u := s.users[email]
+			log.WithField("user", email).Info("Adding user to group")
+			_, err = identitystore.CreateGroupMembership(ctx,
+				s.identityStore,
+				aws_sdk.String(s.cfg.IdentityStoreID),
+				aws_sdk.String(group.ID),
+				aws_sdk.String(u.ID),
+			)
 			if err != nil {
 				return err
 			}
+		}
 
-			if _, ok := memberList[u.Username]; ok {
-				if !*b {
-					log.WithField("user", u.Username).Info("Adding user to group")
-					_, err = identitystore.CreateGroupMembership(ctx,
-						s.identityStore,
-						aws_sdk.String(s.cfg.IdentityStoreID),
-						aws_sdk.String(group.ID),
-						aws_sdk.String(u.ID),
-					)
-					if err != nil {
-						return err
-					}
-				}
-			} else {
-				if *b {
-					log.WithField("user", u.Username).Warn("Removing user from group")
-					err := s.RemoveUserFromGroup(&u.ID, &group.ID)
-					if err != nil {
-						return err
-					}
-				}
+		for email := range currentMemberEmails {
+			if _, shouldBeMember := desiredMemberEmails[email]; shouldBeMember {
+				continue
+			}
+			u, ok := s.users[email]
+			if !ok {
+				continue
+			}
+			log.WithField("user", email).Warn("Removing user from group")
+			if err := s.RemoveUserFromGroup(&u.ID, &group.ID); err != nil {
+				return err
 			}
 		}
 	}
