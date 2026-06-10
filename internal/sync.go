@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -53,8 +54,6 @@ type syncGSuite struct {
 	identityStore interfaces.IdentityStoreAPI
 
 	users            map[string]*interfaces.User
-	ignoreUsersSet   map[string]struct{}
-	ignoreGroupsSet  map[string]struct{}
 	includeGroupsSet map[string]struct{}
 }
 
@@ -1086,25 +1085,21 @@ func DoSync(ctx context.Context, cfg *config.Config) error {
 }
 
 func (s *syncGSuite) ignoreUser(name string) bool {
-	if s.ignoreUsersSet == nil {
-		s.ignoreUsersSet = make(map[string]struct{}, len(s.cfg.IgnoreUsers))
-		for _, u := range s.cfg.IgnoreUsers {
-			s.ignoreUsersSet[u] = struct{}{}
+	for _, pattern := range s.cfg.IgnoreUsers {
+		if matched, _ := path.Match(pattern, name); matched {
+			return true
 		}
 	}
-	_, exists := s.ignoreUsersSet[name]
-	return exists
+	return false
 }
 
 func (s *syncGSuite) ignoreGroup(name string) bool {
-	if s.ignoreGroupsSet == nil {
-		s.ignoreGroupsSet = make(map[string]struct{}, len(s.cfg.IgnoreGroups))
-		for _, g := range s.cfg.IgnoreGroups {
-			s.ignoreGroupsSet[g] = struct{}{}
+	for _, pattern := range s.cfg.IgnoreGroups {
+		if matched, _ := path.Match(pattern, name); matched {
+			return true
 		}
 	}
-	_, exists := s.ignoreGroupsSet[name]
-	return exists
+	return false
 }
 
 func (s *syncGSuite) includeGroup(name string) bool {
